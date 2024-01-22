@@ -1,0 +1,32 @@
+{
+   "courses":
+   [
+        {
+            "name": "Basics 1",
+            "description": "Holds the basic course for toddlers. Draw a box, submit it, draw a circle, submit it.",
+            "attachments": [],
+            "course_requirements": []
+        },
+        {
+            "name": "Basics 2",
+            "description": "Holds the basic course for toddlers. Draw a box, submit it, draw a circle, submit it.",
+            "attachments": [],
+            "course_requirements": [
+                "Basics 1",
+                "Basics 3"
+            ]
+        },
+        {
+            "name": "Basics 3",
+            "description": "Holds the basic course for toddlers. Draw a box, submit it, draw a circle, submit it.",
+            "attachments": [],
+            "course_requirements": []
+        },
+        {
+            "name": "Basics 3",
+            "description": "Holds the basic course for toddlers. Draw a box, submit it, draw a circle, submit it.",
+            "attachments": [],
+            "course_requirements": []
+        }
+    ]
+}

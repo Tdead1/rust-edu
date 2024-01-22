@@ -1,282 +1,159 @@
-use std::net::TcpListener;
-use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::{collections::HashMap, fs, path::Path};
+use uid;
+use serde::{Deserialize, Serialize};
+use nannou::prelude::*;
 
-const FINALPORT :i16 = 9999;
-// Basic non-threaded application to check if we can get any TCP responses from a network device.
-fn check_ports()
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+struct CourseData
 {
-	let mut last_printed_address = 0;
-	let mut last_open = false;
-
-	for ip_last_digits in 0..255
-	{
-		let ip = format!("192.168.0.{}", ip_last_digits);
-		let mut output_string = String::new();
-		output_string.push_str( format!("Checking IP {} \n", ip).as_str());
-
-		for port in 1..FINALPORT 
-		{
-			let open = match TcpListener::bind((ip.clone(), port as u16)) {
-				Ok(_) => true,
-				Err(_) => false,
-			};
-			if last_open != open 
-			{
-				if last_printed_address == port - 1 {
-					output_string.push_str(format!("Address {} is {}.\n"
-					, port - 1
-					, if last_open { "open" } else { "closed" }).as_str());
-				}
-				else {
-					output_string.push_str(format!("Address {} to {} addresses are {}.\n"
-					, last_printed_address
-					, port - 1
-					, if last_open { "open" } else { "closed" }).as_str());
-				}
-				last_printed_address = port;
-			}
-			last_open = open;
-		}
-
-		output_string.push_str(format!("Address {} to {} addresses are {}. \n"
-		, last_printed_address
-		, FINALPORT
-		, if last_open { "open" } else { "closed" }).as_str());
-
-		print!("{}", output_string);
-	}
-	println!("Finished query.");
+	name: String,
+	description: String,
+	attachments: Vec<String>,
+	course_requirements: Vec<String>,
 }
 
-// This only spawns two threads, which isn't very useful but at least I learned the threading syntax from it.
-fn check_ports_threaded()
+#[derive(Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+struct CourseMapData
 {
-	for ip_last_digits in 0..255
-	{
-		let thead_handle = thread::spawn(move|| 
-		{
-			let mut output = String::new();
-			let ip = format!("192.168.0.{}", ip_last_digits);
-			output.push_str(format!("Checking IP {} \n", ip).as_str());
-
-			for port in 1..FINALPORT 
-			{
-				let open = match TcpListener::bind((ip.clone(), port as u16)) 
-				{
-					Ok(_) => true,
-					Err(_) => false,
-				};
-				if open
-				{
-					output.push_str(format!("Address 192.168.0.{}:{} is {}. \n", ip_last_digits, port, if open { "open" } else { "closed" }).as_str());
-				}
-			}
-			return output;
-		});
-
-		print!("{}", thead_handle.join().unwrap());
-	}
+	courses: Vec<CourseData>
 }
 
-// Spawning more threads for each ip address as well.
-fn check_ports_threaded_optimized()
+#[allow(dead_code)]
+#[derive(Debug)]
+struct Course
 {
-	let final_handle = 
-	thread::spawn(move||
+	id: UID,
+	required_courses: Vec<UID>,
+	data: CourseData
+}
+
+#[allow(dead_code)]
+struct CourseMap
+{
+	map: HashMap<UID, Course>,
+	data: CourseMapData
+}
+
+// Need to think how this access pattern should be setup
+static mut COURSE_DATABASE : Option<CourseMap> = None;
+
+type UID = uid::Id<u64>;
+pub fn main() 
+{
+	// Preperation:
+	let mut string_ids: HashMap<UID, String> = HashMap::new();
+	let _default_coursedata = CourseData {
+		name: String::from("invalid"),
+		description: String::from("invalid"),
+		attachments: Vec::new(),
+		course_requirements: Vec::new(),
+	};
+	
+	// Serialization:
+	let courses_file = Path::new("data/courses.json");
+	let data_string = fs::read_to_string(courses_file).expect("Unable to read or find courses.json!");
+	let course_data : CourseMapData =  match serde_json::from_str(data_string.as_str()) 
 	{
-		let mut open_and_closed_ports = (String::new(), Vec::new());
-		for ip_last_digits in 0..255
+		Ok(value) => value,
+		_error => CourseMapData {courses: Vec::new()},
+	};
+
+	// Resolving:
+	// String ID creation...
+	let mut course_names : Vec<String> = Vec::new();
+	for course in &course_data.courses
+	{
+		course_names.push(course.name.to_lowercase());
+	}
+	course_names.sort();
+	course_names.dedup();
+	for name in course_names
+	{
+		string_ids.insert(UID::new(), name);
+	}
+	// Course creation...
+	let mut course_map: CourseMap = CourseMap {map: HashMap::new(), data: course_data}; 
+	for course in &course_map.data.courses
+	{
+		let id = UID::new();
+		let mut required_courses = Vec::new();
+		for name in &course.course_requirements
 		{
-			println!("Tackling digit {}", ip_last_digits.clone());
-			let thead_handle = 
-			thread::spawn(move || 
-			{
-				let ip: String = format!("192.168.0.{}", ip_last_digits);
-				let mut open_ports: Vec<i16> = Vec::new();
-				open_ports.reserve(1000);
-
-				let mut closed_ports: Vec<i16> = Vec::new();
-				closed_ports.reserve(1000);
-
-				for port in 1..FINALPORT 
-				{
-					if match TcpListener::bind((ip.clone(), port as u16)) { Ok(_) => true, Err(_) => false, }
-					{
-						open_ports.push(port);
-					}
-					else 
-					{
-						closed_ports.push(port);
-					};
-				}
-				return (open_ports, closed_ports);
+			let lowercase_name = name.to_lowercase();
+			string_ids.iter().for_each(|(key, value)| 
+			if value.to_string() == lowercase_name 
+			{ 
+				required_courses.push(key.to_owned()); 
 			});
-			open_and_closed_ports.0 = format!("192.168.0.{}", ip_last_digits);
-			open_and_closed_ports.1.push(thead_handle.join());
 		}
-		return open_and_closed_ports; 
-	});
+		course_map.map.insert(id, Course { id, required_courses, data: course.clone() });
+	}
 
-	let result = final_handle.join().unwrap();
-	let ip = result.0;
-	let data = result.1;
-	for result in data
+	// Course resolving so the id's don't point to string names anymore...
+	for course in &course_map.map
 	{
-		for open_port in result.unwrap().0
+		for mut requirement in &course.1.required_courses
 		{
-			println!("Open port found: {}:{}", ip, open_port);
+			let dependency_name = string_ids.get(&requirement).expect("Large problem with string ID indexing! Contact your nearest programmer.").clone();
+			let mut found_dependency: bool = false;
+			course_map.map.iter().for_each(|(id, course)| if course.data.name.to_lowercase() == dependency_name.to_lowercase()
+			{ 
+				requirement = id; 
+				found_dependency = true; 
+			});	
+			if !found_dependency
+			{
+				println!("Dependency {} could not be found while resolving the names!", dependency_name);
+			}
 		}
 	}
+
+	// Debug:
+	println!("Constant data after serialization:");
+	for i in &course_map.data.courses
+	{
+		println!("{:?}", i);
+	}
+	println!();
+	println!("Runtime data after resolving:");
+	for i in &course_map.map
+	{
+		println!("{:?}", i);
+	}
+
+	// Storing our resolved data into a global variable
+	//unsafe { COURSE_DATABASE = Option::Some(course_map) };
+	// Not the rust way :(
+	nannou::sketch(view).run()
 }
 
-// I misunderstood threads, here is an example of using them correctly:
-fn check_ports_threaded_fixed()
+fn draw_course(draw :&Draw, uid :&UID, x :f32, y :f32)
 {
-	for ip_last_digits in 0..255
-	{
-		println!("Tackling digit {}", ip_last_digits.clone());
-		let mut output = String::new();
-		let ip = format!("192.168.0.{}", ip_last_digits);
-		output.push_str(format!("Checking IP {} \n", ip.clone()).as_str());
-		
-		let mut threads:Vec<JoinHandle<(i16, bool)>> = Vec::new(); 
-		for port in 1..FINALPORT 
-		{
-			threads.push(thread::spawn(move || {
-				return (port, match TcpListener::bind((format!("192.168.0.{}", ip_last_digits), port as u16)){ Ok(_) => true, Err(_) => false, })
-			}));
-		}
-		for i in threads
-		{
-			let result = i.join().unwrap();
-			if result.1
-			{
-				println!("Open port found: 192.168.0.{}, {}", ip_last_digits, result.0);
-			}
-		}
-	}
+	draw.quad()
+	.x_y(x,y);
+
+	draw.text("Hello!")
+	.x_y(x,y)
+	.color(BLACK);
 }
 
-// This will eventually complete, but uh... Yeah. Made the amounts of ports to check 15, otherwise I'm taxing my pc too much.
-// Could potentially be used if I had a near-infinite amount of threads available, like a server botnet or something.
-fn check_ports_threaded_fixed_extreme()
-{
-	let mut base_threads: Vec<JoinHandle<(i32, Vec<JoinHandle<(i16, bool)>>)>> = Vec::new(); 
-	
-	for ip_last_digits in 0..15
-	{
-		base_threads.push(thread::spawn(move || 
-		{
-			println!("Tackling digit {}", ip_last_digits.clone());
-			let mut output = String::new();
-			let ip = format!("192.168.0.{}", ip_last_digits);
-			output.push_str(format!("Checking IP {} \n", ip.clone()).as_str());
-			
-			let mut threads:Vec<JoinHandle<(i16, bool)>> = Vec::new(); 
-			for port in 1..FINALPORT 
-			{
-				threads.push(thread::spawn(move || {
-					return (port, match TcpListener::bind((format!("192.168.0.{}", ip_last_digits), port as u16)){ Ok(_) => true, Err(_) => false, })
-				}));
-			}
-			return (ip_last_digits.clone(), threads);
-		}));
-	}
+fn view(app: &App, frame: Frame) {
+    // Begin drawing
+    let draw = app.draw();
 
-	for base_thread in base_threads
-	{
-		print!("Still alive!\n");
-		let base_thread_results = base_thread.join().unwrap();
-		for base_thread_result in base_thread_results.1
-		{
-			print!("Working hard!\n");
-			let result = base_thread_result.join().unwrap();
-			let open = result.1;
-			let port = result.0;
-			if open
-			{
-				println!("Open port found: 192.168.0.{}:{}", base_thread_results.0, port);
-			}
-		}
-	}
-}
+    // Clear the background to blue.
+    draw.background().color(CORNFLOWERBLUE);
 
-// For a single pc, by far the best solution. One thread per IP, which checks 9999 ports each.
-fn check_ports_ultimate()
-{
-	let mut base_threads: Vec<JoinHandle<(i32, Vec<(i16, bool)>)>> = Vec::new(); 
-	
-	for ip_last_digits in 0..255
-	{
-		base_threads.push(thread::spawn(move || 
-		{
-			println!("Tackling digit {}", ip_last_digits.clone());
-			let mut output = String::new();
-			let ip = format!("192.168.0.{}", ip_last_digits);
-			output.push_str(format!("Checking IP {} \n", ip.clone()).as_str());
-			
-			let mut results : Vec<(i16, bool)> = Vec::new(); 
-			for port in 1..FINALPORT 
-			{
-				results.push((port, match TcpListener::bind((format!("192.168.0.{}", ip_last_digits), port as u16)){ Ok(_) => true, Err(_) => false, }));
-			}
-			return (ip_last_digits.clone(), results);
-		}));
-	}
+    //// Draw a quad that follows the inverse of the ellipse.
+	//let t = app.time;
+	//for i in &(COURSE_DATABASE.unwrap()).map
+	//{
+	//	draw_course(&draw, &i.0, 50.0, 50.0);
+	//}
 
-	for base_thread in base_threads
-	{
-		let base_thread_results = base_thread.join().unwrap();
-		for vector_result in base_thread_results.1
-		{
-			let open = vector_result.1;
-			let port = vector_result.0;
-			if open
-			{
-				println!("Open port found: 192.168.0.{}:{}", base_thread_results.0, port);
-			}
-		}
-	}
-}
-
-fn main() 
-{
-	let first_check_start = Instant::now();
-	check_ports();
-	let first_check_duration = first_check_start.elapsed().as_millis();
-	print!("{esc}c", esc = 27 as char);
-	
-	let second_check_start = Instant::now();
-	check_ports_threaded();
-	let second_check_duration = second_check_start.elapsed().as_millis();
-	print!("{esc}c", esc = 27 as char);
-	
-	let third_check_start = Instant::now();
-	check_ports_threaded_optimized();
-	let third_check_duration = third_check_start.elapsed().as_millis();
-	print!("{esc}c", esc = 27 as char);
-	
-	let fourth_check_start = Instant::now();
-	check_ports_threaded_fixed();
-	let fourth_check_duration = fourth_check_start.elapsed().as_millis();
-	print!("{esc}c", esc = 27 as char);
-
-	let fifth_check_start = Instant::now();
-	check_ports_threaded_fixed_extreme();
-	let fifth_check_duration = fifth_check_start.elapsed().as_millis();
-	print!("{esc}c", esc = 27 as char);
-
-	let sixth_check_start = Instant::now();
-	check_ports_ultimate();
-	let sixth_check_duration = sixth_check_start.elapsed().as_millis();
-	print!("{esc}c", esc = 27 as char);
-
-	println!("\n\n timings (s):");
-	println!("1th duration: {:.4} seconds", (first_check_duration as f64) * 0.001);
-	println!("2th duration: {:.4} seconds", (second_check_duration as f64) * 0.001);
-	println!("3th duration: {:.4} seconds", (third_check_duration as f64) * 0.001);
-	println!("4th duration: {:.4} seconds", (fourth_check_duration as f64) * 0.001);
-	println!("5th duration: {:.4} seconds", (fifth_check_duration as f64) * 0.001);
-	println!("6th duration: {:.4} seconds", (sixth_check_duration as f64) * 0.001);
+    
+	// Write the result of our drawing to the window's frame.
+    draw.to_frame(app, &frame).unwrap();
 }
